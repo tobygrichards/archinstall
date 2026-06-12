@@ -10,9 +10,12 @@ LOCALE="en_GB.UTF-8"
 KEYMAP="uk"
 
 # --- Disk (DESTRUCTIVE phase only) ----------------------------------
-# MUST be set explicitly before running `provision.sh disk`.
-# Left empty deliberately so a fresh checkout REFUSES rather than guesses.
-TARGET_DISK=""              # /dev/vda in the VM; /dev/nvme0n1 on metal — never assumed
+# Supply at runtime, NOT committed with a path baked in:
+#   TARGET_DISK=/dev/nvme0n1 ./provision.sh disk
+# The ":-" means a runtime/env value wins; the committed default stays empty
+# so a fresh clone never carries a disk path that was right for another machine.
+# If left empty and you're at a terminal, the script offers a picker.
+TARGET_DISK="${TARGET_DISK:-}"   # never hardcode a path here
 
 # Subvolumes the clean build is ALLOWED to destroy and recreate.
 # @data is deliberately NOT here. That absence is the safety boundary.

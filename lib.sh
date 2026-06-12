@@ -52,10 +52,63 @@ ensure_subvol() {
   btrfs subvolume create "$mnt/$sv"
 }
 
+# Partition node naming differs by device class: nvme/mmc/loop use pN,
+# sd/vd use N. One helper so the picker and provision.sh never disagree.
+part_node() {
+  local disk="$1" num="$2"
+  if [[ "$disk" =~ (nvme|mmcblk|loop) ]]; then
+    echo "${disk}p${num}"
+  else
+    echo "${disk}${num}"
+  fi
+}
+
 # --- Disk target validation -----------------------------------------
+# Resolution order: runtime/env value -> interactive picker (if at a tty)
+# -> refuse. We never silently default to a path.
 require_disk() {
-  [[ -n "${TARGET_DISK:-}" ]] || die "TARGET_DISK is empty. Set it in config.sh — never guessed."
-  [[ -b "$TARGET_DISK" ]]     || die "TARGET_DISK ($TARGET_DISK) is not a block device."
+  if [[ -z "${TARGET_DISK:-}" ]]; then
+    if [[ -t 0 ]]; then
+      pick_disk
+    else
+      die "TARGET_DISK is empty and no terminal to pick from.
+           Pass it at runtime, e.g.  TARGET_DISK=/dev/nvme0n1 ./provision.sh disk"
+    fi
+  fi
+  [[ -b "$TARGET_DISK" ]] || die "TARGET_DISK ($TARGET_DISK) is not a block device."
+}
+
+# Probe whole disks (not partitions) and let the user choose. Each option
+# is annotated with what's on it — including whether it already carries
+# @data — so the data drive is obvious and hard to pick by mistake.
+pick_disk() {
+  mapfile -t disks < <(lsblk -dpn -o NAME,TYPE | awk '$2=="disk"{print $1}')
+  (( ${#disks[@]} )) || die "no disks found by lsblk."
+
+  warn "Select the TARGET disk. This is the one that gets partitioned/wiped."
+  echo
+  local i=1 line size model state flag
+  for d in "${disks[@]}"; do
+    size="$(lsblk -dn -o SIZE "$d")"
+    model="$(lsblk -dn -o MODEL "$d" | xargs)"
+    # annotate with detected state so a data-bearing disk stands out
+    state="$(detect_disk_state "$(part_node "$d" 2)" 2>/dev/null || echo unknown)"
+    case "$state" in
+      rebuild)   flag="*** HAS @data — your data lives here ***" ;;
+      fresh)     flag="(blank / no btrfs)" ;;
+      ambiguous) flag="(existing btrfs, no @data — foreign?)" ;;
+      *)         flag="" ;;
+    esac
+    printf "  %d) %-14s %6s  %-20s %s\n" "$i" "$d" "$size" "${model:-?}" "$flag"
+    ((i++))
+  done
+  echo
+  read -rp "Number (or q to abort): " choice
+  [[ "$choice" == q ]] && die "aborted."
+  [[ "$choice" =~ ^[0-9]+$ ]] && (( choice>=1 && choice<=${#disks[@]} )) \
+    || die "invalid selection."
+  TARGET_DISK="${disks[choice-1]}"
+  log "selected $TARGET_DISK"
 }
 
 # --- Disk state detection (the most dangerous decision in the project) ---

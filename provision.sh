@@ -20,13 +20,10 @@ BTRFS_OPTS="noatime,compress=zstd,space_cache=v2"
 # ====================================================================
 # PHASE: disk   (DESTRUCTIVE — one-shot, from the live ISO)
 # ====================================================================
-# Partition naming. nvme/mmc use pN; sd/vd use N. Resolve once, here.
+# Partition nodes, via the shared helper in lib.sh (single source of truth).
 set_partitions() {
-  if [[ "$TARGET_DISK" =~ (nvme|mmcblk|loop) ]]; then
-    ESP="${TARGET_DISK}p1"; ROOT="${TARGET_DISK}p2"
-  else
-    ESP="${TARGET_DISK}1";  ROOT="${TARGET_DISK}2"
-  fi
+  ESP="$(part_node "$TARGET_DISK" 1)"
+  ROOT="$(part_node "$TARGET_DISK" 2)"
 }
 
 # ====================================================================
