@@ -29,6 +29,24 @@ USERNAME="toby"
 USER_UID=1000              # pinned: a persisted home stays correctly owned
 USER_GROUPS="wheel,audio,video,storage"
 
+# --- Passwords (HASHES, never plaintext) ----------------------------
+# Three ways, in priority order:
+#   1. Supply a hash at runtime (unattended):
+#        ROOT_PASSWD_HASH='$6$...' ./provision.sh disk
+#      Generate with:  openssl passwd -6   (or  mkpasswd -m sha-512)
+#   2. Supply nothing and run at a terminal: you'll be PROMPTED during the
+#      build (typed silently, hashed in memory, never stored — preferred).
+#   3. Supply nothing, non-interactive: account left untouched (root locked).
+# See the security note in lib.sh before you ever commit a real hash.
+ROOT_PASSWD_HASH="${ROOT_PASSWD_HASH:-}"
+USER_PASSWD_HASH="${USER_PASSWD_HASH:-}"
+
+# --- Kernel (the boot entry's vmlinuz/initramfs names derive from this) ---
+# Stock Arch: "linux" -> /boot/vmlinuz-linux + initramfs-linux.img
+# CachyOS:    "linux-cachyos" -> vmlinuz-linux-cachyos, etc.
+# Keep this in step with whatever kernel is in PACKAGES below.
+KERNEL="linux"
+
 # --- Packages (Model A: this list is the source of truth) -----------
 PACKAGES=(
   base base-devel linux linux-firmware

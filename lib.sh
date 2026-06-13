@@ -31,6 +31,38 @@ ensure_user() {
   useradd -m -u "$uid" -G "$groups" -s /usr/bin/fish "$name"
 }
 
+# Prompt for a password (twice, silently) and emit ONLY its hash on stdout.
+# Prompts and messages go to stderr so command substitution captures the
+# hash alone. Blank or mismatched => non-zero, caller decides what to do.
+# Nothing is echoed, logged, or written to disk — the plaintext never leaves
+# this function, and only the $6$ hash is ever forwarded onward.
+prompt_password() {
+  local who="$1" p1 p2
+  read -rsp "Password for ${who} (blank to skip): " p1; echo >&2
+  [[ -z "$p1" ]] && { warn "no password set for $who"; return 1; }
+  read -rsp "Confirm ${who} password: " p2; echo >&2
+  [[ "$p1" == "$p2" ]] || { warn "passwords did not match for $who"; return 1; }
+  openssl passwd -6 "$p1"
+}
+
+# Apply a PRE-HASHED password. Empty hash => leave the account as-is
+# (root therefore stays locked, which is the safe default). Idempotent:
+# re-applying the same hash is a no-op in effect.
+#
+# SECURITY NOTE — read before committing a hash:
+#   A $6$ SHA-512 crypt hash is NOT plaintext, but it IS crackable offline
+#   by anyone who gets the file. If this repo is public, a committed hash is
+#   a weak password away from being someone's root. Prefer the runtime env
+#   override (ROOT_PASSWD_HASH=... ./provision.sh disk) or a .gitignored
+#   local secrets file. The committed default stays empty for this reason.
+set_password() {
+  local who="$1" hash="$2"
+  [[ -n "$hash" ]] || { warn "no password hash for '$who' — leaving account unchanged"; return 0; }
+  id -u "$who" &>/dev/null || { warn "user '$who' does not exist — cannot set password"; return 0; }
+  printf '%s:%s\n' "$who" "$hash" | chpasswd -e
+  log "password set for $who"
+}
+
 # --- Destructive primitives — GUARDED -------------------------------
 # This is the guard we agreed to write BEFORE the feature. destroy_subvol
 # refuses anything not explicitly allowlisted, and refuses a KEEP subvol
