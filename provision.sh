@@ -166,9 +166,12 @@ phase_system() {
   pkg_install
 
   log "user"
-  ensure_user "$USERNAME" "$USER_UID" "$USER_GROUPS"
+  ensure_user "$USERNAME" "$USER_UID" "$USER_GROUPS" "$USER_SHELL"
   set_password root        "$ROOT_PASSWD_HASH"
   set_password "$USERNAME" "$USER_PASSWD_HASH"
+
+  log "sudo"
+  configure_sudo "$SUDO_NOPASSWD"
 
   log "services"
   for s in "${SERVICES[@]}"; do ensure_service "$s"; done

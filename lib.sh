@@ -22,13 +22,33 @@ ensure_service() {
 }
 
 ensure_user() {
-  local name="$1" uid="$2" groups="$3"
+  local name="$1" uid="$2" groups="$3" shell="$4"
   if id -u "$name" &>/dev/null; then
     log "user $name exists — skip"
     return 0
   fi
-  log "creating user $name (uid $uid)"
-  useradd -m -u "$uid" -G "$groups" -s /usr/bin/fish "$name"
+  log "creating user $name (uid $uid, shell $shell)"
+  useradd -m -u "$uid" -G "$groups" -s "$shell" "$name"
+}
+
+# Grant the wheel group sudo via a drop-in (never edit /etc/sudoers directly —
+# a syntax error there can lock you out). Validate with `visudo -c` BEFORE the
+# file is trusted; if it doesn't parse, remove it and fail loudly rather than
+# ship a broken sudoers. Idempotent: rewrites the same drop-in each run.
+configure_sudo() {
+  local nopasswd="${1:-0}" line file="/etc/sudoers.d/10-wheel"
+  if [[ "$nopasswd" == 1 ]]; then
+    line='%wheel ALL=(ALL:ALL) NOPASSWD: ALL'
+  else
+    line='%wheel ALL=(ALL:ALL) ALL'
+  fi
+  printf '%s\n' "$line" > "$file"
+  chmod 0440 "$file"
+  if ! visudo -cf "$file" &>/dev/null; then
+    rm -f "$file"
+    die "sudoers drop-in failed validation — removed it rather than risk lockout."
+  fi
+  log "sudo configured for wheel (nopasswd=$nopasswd)"
 }
 
 # Prompt for a password (twice, silently) and emit ONLY its hash on stdout.

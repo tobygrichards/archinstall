@@ -28,6 +28,15 @@ KEEP_SUBVOLS=(@data)
 USERNAME="toby"
 USER_UID=1000              # pinned: a persisted home stays correctly owned
 USER_GROUPS="wheel,audio,video,storage"
+USER_SHELL="/bin/bash"     # login shell. bash = max compatibility with most
+                           # Linux instructions. Set to /usr/bin/fish if you
+                           # want fish as login shell (ensure it's in PACKAGES).
+
+# --- sudo -----------------------------------------------------------
+# Grant the wheel group sudo. Password-required by default — safer on a box
+# that holds real work/accounts. Set NOPASSWD=1 for passwordless (convenient,
+# but anything running as you can escalate silently).
+SUDO_NOPASSWD=0
 
 # --- Passwords (HASHES, never plaintext) ----------------------------
 # Three ways, in priority order:
