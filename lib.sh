@@ -51,6 +51,33 @@ configure_sudo() {
   log "sudo configured for wheel (nopasswd=$nopasswd)"
 }
 
+# Configure SDDM for a Wayland-only system. The default greeter is X11
+# (DisplayServer=x11) — on a box with no Xorg installed that produces a
+# greeter that can't start, i.e. a black screen at boot. So we MUST set the
+# Wayland greeter explicitly. KWin is the compositor; layer-shell-qt (in
+# PACKAGES) is required for the themed Qt6 greeter. Theme set separately.
+configure_sddm() {
+  local theme="${1:-}"
+  install -d /etc/sddm.conf.d
+  cat > /etc/sddm.conf.d/10-wayland.conf <<'EOF'
+[General]
+DisplayServer=wayland
+GreeterEnvironment=QT_WAYLAND_SHELL_INTEGRATION=layer-shell
+
+[Wayland]
+CompositorCommand=kwin_wayland --drm --no-lockscreen --no-global-shortcuts --locale1
+EOF
+  if [[ -n "$theme" ]]; then
+    cat > /etc/sddm.conf.d/20-theme.conf <<EOF
+[Theme]
+Current=${theme}
+EOF
+    log "SDDM: Wayland greeter, theme '$theme'"
+  else
+    warn "SDDM: Wayland greeter set, but no theme — embedded fallback will look dated."
+  fi
+}
+
 # Prompt for a password (twice, silently) and emit ONLY its hash on stdout.
 # Prompts and messages go to stderr so command substitution captures the
 # hash alone. Blank or mismatched => non-zero, caller decides what to do.

@@ -62,8 +62,20 @@ PACKAGES=(
   btrfs-progs
   networkmanager
   sudo git stow fish
+
+  # --- KDE Plasma (Wayland-only; X11 session is dropped from 6.8) ---
+  plasma-desktop            # lean: NOT the 'plasma' meta (avoids KDE PIM etc.)
+  sddm                      # login manager (KDE-native, themes cleanly)
+  layer-shell-qt            # REQUIRED for the Wayland SDDM greeter (Qt6)
+  konsole dolphin           # terminal + file manager
+  pipewire pipewire-pulse wireplumber   # audio (you capture audio)
   # ... your daily set goes here
 )
+
+# SDDM theme. "breeze" is the official KDE theme — clean, modern, dark-capable,
+# and survives Plasma updates (unlike third-party/AUR themes). Empty => SDDM's
+# dated embedded fallback (the "Windows 2000" look), so don't leave it empty.
+SDDM_THEME="breeze"
 
 AUR=(
   # davinci-resolve
@@ -72,6 +84,7 @@ AUR=(
 # --- Services to enable ---------------------------------------------
 SERVICES=(
   NetworkManager
+  sddm                      # start the graphical login at boot
 )
 
 # --- Dotfiles (config is disposable — git owns it, not @home) -------

@@ -173,6 +173,9 @@ phase_system() {
   log "sudo"
   configure_sudo "$SUDO_NOPASSWD"
 
+  log "sddm (display manager)"
+  configure_sddm "$SDDM_THEME"
+
   log "services"
   for s in "${SERVICES[@]}"; do ensure_service "$s"; done
 
