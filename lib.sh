@@ -91,10 +91,26 @@ destroy_subvol() {
   local mnt="$1" sv="$2"
   [[ " ${KEEP_SUBVOLS[*]} " == *" $sv "* ]] && die "refusing to destroy protected subvol: $sv"
   [[ " ${WIPE_SUBVOLS[*]} " == *" $sv "* ]] || die "refusing to destroy non-allowlisted subvol: $sv"
-  if btrfs subvolume show "$mnt/$sv" &>/dev/null; then
-    log "destroying subvol $sv"
-    btrfs subvolume delete "$mnt/$sv"
-  fi
+  btrfs subvolume show "$mnt/$sv" &>/dev/null || return 0
+
+  # A populated @ accumulates NESTED subvolumes (pacstrap/systemd create
+  # e.g. var/lib/portables, var/lib/machines). btrfs refuses to delete a
+  # parent while children exist, so delete children DEEPEST-FIRST. We scope
+  # strictly to paths under "$sv/" so this can never wander into @data.
+  local child
+  while IFS= read -r child; do
+    [[ -n "$child" ]] || continue
+    log "  destroying nested subvol $child"
+    btrfs subvolume delete "$mnt/$child"
+  done < <(
+    btrfs subvolume list -o "$mnt/$sv" 2>/dev/null \
+      | awk '{print $NF}' \
+      | grep -E "^${sv}/" \
+      | awk '{print length, $0}' | sort -rn | cut -d" " -f2-
+  )
+
+  log "destroying subvol $sv"
+  btrfs subvolume delete "$mnt/$sv"
 }
 
 ensure_subvol() {
