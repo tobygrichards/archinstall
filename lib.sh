@@ -8,10 +8,109 @@ warn() { printf '\033[1;33m!!\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31mXX\033[0m %s\n' "$*" >&2; exit 1; }
 
 # --- Idempotency guards (the entire "re-runnable" tax) --------------
-# Packages: --needed already skips what's installed. Nothing more needed.
+# Enable the [multilib] repo (32-bit packages, needed by Steam). The stock
+# pacman.conf ships it commented out as a 2-line block. Uncomment both lines
+# idempotently. Must run BEFORE pkg_install if any 32-bit package is wanted.
+enable_multilib() {
+  grep -qE '^\[multilib\]' /etc/pacman.conf && { log "multilib already enabled"; return 0; }
+  log "enabling [multilib] repo"
+  # uncomment the [multilib] header and the Include line that follows it
+  sed -i '/^#\[multilib\]/{s/^#//;n;s/^#//}' /etc/pacman.conf
+  grep -qE '^\[multilib\]' /etc/pacman.conf || warn "multilib enable may have failed — check /etc/pacman.conf"
+}
+
+# Packages: --needed already skips what's installed. But pacman fails the
+# WHOLE transaction if any one name doesn't resolve (renamed/removed). So we
+# validate names first, report the bad ones clearly, and act per build mode:
+#   fresh   -> abort (don't leave a half-built system silently missing things)
+#   rebuild -> skip the bad ones, install the rest, warn (a working machine
+#              missing one app beats no machine because one name drifted)
+# mode is passed in ($1); defaults to "rebuild" (the safer-to-continue case).
 pkg_install() {
+  local mode="${1:-rebuild}"
   (( ${#PACKAGES[@]} )) || return 0
-  pacman -S --needed --noconfirm "${PACKAGES[@]}"
+
+  # refresh the sync db once so resolution checks are against current names
+  pacman -Sy --noconfirm &>/dev/null || warn "pacman -Sy failed; resolution checks may be stale"
+
+  local good=() bad=() p
+  for p in "${PACKAGES[@]}"; do
+    # resolves if it's a real package OR something 'provides' it
+    if pacman -Sp "$p" &>/dev/null; then
+      good+=("$p")
+    else
+      bad+=("$p")
+    fi
+  done
+
+  if (( ${#bad[@]} )); then
+    warn "these package names no longer resolve: ${bad[*]}"
+    if [[ "$mode" == fresh ]]; then
+      die "aborting fresh build — fix the names in config.sh and re-run.
+           (A first build shouldn't silently omit packages.)"
+    fi
+    warn "rebuild: skipping the unresolved names and continuing."
+  fi
+
+  (( ${#good[@]} )) || { warn "no resolvable packages to install"; return 0; }
+  pacman -S --needed --noconfirm "${good[@]}"
+}
+
+# --- AUR -------------------------------------------------------------
+# makepkg REFUSES to run as root (it executes arbitrary AUR build scripts).
+# The provisioner runs as root, so every AUR action drops to $user via
+# `sudo -u`. Requires: the user exists, base-devel + git are installed, and
+# the user has working sudo (configure_sudo has run). Call AFTER those.
+#
+# THE SUDO WRINKLE: makepkg internally calls `sudo pacman` to install build
+# deps and the finished package. With password-required sudo (our default),
+# that prompt would HANG an unattended build. So we grant a NARROW, TEMPORARY
+# passwordless rule (pacman only, this user only) for the build window, and
+# remove it via trap so it's gone even if the build fails. Daily password-
+# required sudo is untouched.
+_aur_sudo_grant="/etc/sudoers.d/99-aur-build"
+aur_grant_temp_sudo() {
+  local user="$1"
+  printf '%s ALL=(root) NOPASSWD: /usr/bin/pacman\n' "$user" > "$_aur_sudo_grant"
+  chmod 0440 "$_aur_sudo_grant"
+  visudo -cf "$_aur_sudo_grant" &>/dev/null || { rm -f "$_aur_sudo_grant"; die "temp AUR sudo grant failed validation"; }
+}
+aur_revoke_temp_sudo() { rm -f "$_aur_sudo_grant"; }
+
+# Bootstrap the AUR helper itself. yay comes FROM the AUR, so the first
+# install is a manual git-clone + makepkg as the user. Idempotent: if yay is
+# already present, do nothing (so rebuilds skip the dance).
+ensure_aur_helper() {
+  local user="$1"
+  command -v yay &>/dev/null && { log "yay present — skip bootstrap"; return 0; }
+  log "bootstrapping yay (as $user)"
+  local tmp="/tmp/yay-bootstrap"
+  rm -rf "$tmp"
+  sudo -u "$user" git clone --depth=1 https://aur.archlinux.org/yay-bin.git "$tmp" \
+    || { warn "yay clone failed — AUR packages will be skipped"; return 1; }
+  ( cd "$tmp" && sudo -u "$user" makepkg -si --noconfirm ) \
+    || { warn "yay build failed — AUR packages will be skipped"; return 1; }
+  rm -rf "$tmp"
+  command -v yay &>/dev/null
+}
+
+# Install the AUR list as the user. Same resilience policy as pkg_install:
+# AUR names drift/vanish MORE than repo names (maintainers orphan or delete
+# packages), so a bad name warns and is skipped, never aborts a build.
+# --needed makes it idempotent; yay skips already-installed packages.
+aur_install() {
+  local user="$1"
+  (( ${#AUR[@]} )) || return 0
+  command -v yay &>/dev/null || { warn "no yay — skipping all AUR packages"; return 0; }
+
+  local p
+  for p in "${AUR[@]}"; do
+    if sudo -u "$user" yay -S --needed --noconfirm "$p"; then
+      log "  aur: $p ok"
+    else
+      warn "  aur: '$p' failed (renamed/removed/build error) — skipping"
+    fi
+  done
 }
 
 ensure_service() {
@@ -76,6 +175,41 @@ EOF
   else
     warn "SDDM: Wayland greeter set, but no theme — embedded fallback will look dated."
   fi
+}
+
+# Wire @data into the user's home via bind mounts, so apps save to their
+# normal home locations and the files transparently live on @data (surviving
+# rebuilds). Runs in the chroot: / is the installed system, @data is at /data,
+# home at /home/$user. Writes to the INSTALLED fstab so the mounts persist on
+# real boots — not just during the build.
+#
+# Order matters: create the @data source AND the home mountpoint, set
+# ownership, THEN record the bind. Deep paths (the Resolve db) get their
+# parents made first, or the mount fails silently and the app starts fresh.
+configure_data_binds() {
+  local user="$1" uid="$2"; shift 2
+  local data=/data home="/home/$user"
+  local gid; gid="$(id -g "$uid" 2>/dev/null || echo "$uid")"
+
+  local entry src rel srcpath dstpath
+  for entry in "$@"; do
+    src="${entry%%|*}"            # subdir inside @data
+    rel="${entry##*|}"            # path relative to home
+    srcpath="$data/$src"
+    dstpath="$home/$rel"
+
+    # source on @data: create once, persists across builds; own it as the user
+    install -d -o "$uid" -g "$gid" "$srcpath"
+
+    # mountpoint in (freshly-wiped) home: parents too, for deep paths
+    install -d -o "$uid" -g "$gid" "$dstpath"
+
+    # idempotent fstab entry (don't duplicate on re-run)
+    if ! grep -qsF " $dstpath " /etc/fstab; then
+      printf '%s %s none bind 0 0\n' "$srcpath" "$dstpath" >> /etc/fstab
+      log "  bind $srcpath -> $dstpath"
+    fi
+  done
 }
 
 # Prompt for a password (twice, silently) and emit ONLY its hash on stdout.

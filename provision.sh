@@ -36,6 +36,9 @@ phase_disk() {
 
   local state; state="$(detect_disk_state "$ROOT")"
   log "disk state: $state"
+  # BUILD_MODE drives the package-resilience policy in pkg_install:
+  # fresh -> abort on a bad name; rebuild -> skip and continue.
+  BUILD_MODE="$state"
 
   case "$state" in
     fresh)
@@ -67,7 +70,7 @@ resolve_passwords() {
     ROOT_PASSWD_HASH="$(prompt_password root || true)"
   fi
   if [[ -z "${USER_PASSWD_HASH:-}" && -t 0 ]]; then
-    USER_PASSWD_HASH="$(prompt_password "$USERNAME" || true)"
+    USER_PASSWD_HASH="$(prompt_password "$PRIMARY_USER" || true)"
   fi
 }
 
@@ -131,13 +134,15 @@ mount_tree() {
 }
 
 install_base() {
-  pacstrap -K "$MOUNT" "${PACKAGES[@]}"
+  pacstrap -K "$MOUNT" "${BASE_PACKAGES[@]}"
   genfstab -U "$MOUNT" >> "$MOUNT/etc/fstab"
   cp -r "$HERE" "$MOUNT/root/provision"
   # arch-chroot starts a clean environment, so runtime secrets set on the
   # ISO (e.g. ROOT_PASSWD_HASH=... ./provision.sh disk) would NOT survive
   # the boundary. Forward them explicitly via env, not via a file on disk.
   arch-chroot "$MOUNT" env \
+    PROFILE="${PROFILE:-vm}" \
+    BUILD_MODE="${BUILD_MODE:-rebuild}" \
     ROOT_PASSWD_HASH="${ROOT_PASSWD_HASH:-}" \
     USER_PASSWD_HASH="${USER_PASSWD_HASH:-}" \
     /root/provision/provision.sh system
@@ -162,13 +167,24 @@ phase_system() {
   log "initramfs (btrfs needs no extra hooks, but regenerate to be sure)"
   mkinitcpio -P
 
-  log "packages"
-  pkg_install
+  log "multilib (32-bit repo, for Steam)"
+  enable_multilib
 
-  log "user"
-  ensure_user "$USERNAME" "$USER_UID" "$USER_GROUPS" "$USER_SHELL"
-  set_password root        "$ROOT_PASSWD_HASH"
-  set_password "$USERNAME" "$USER_PASSWD_HASH"
+  log "packages"
+  pkg_install "${BUILD_MODE:-rebuild}"
+
+  log "users"
+  set_password root "$ROOT_PASSWD_HASH"
+  local urec uname uuid ugroups ushell rest
+  for urec in "${USERS[@]}"; do
+    uname="${urec%%|*}";    rest="${urec#*|}"
+    uuid="${rest%%|*}";     rest="${rest#*|}"
+    ugroups="${rest%%|*}";  ushell="${rest##*|}"
+    ensure_user "$uname" "$uuid" "$ugroups" "$ushell"
+    # primary user's password comes from USER_PASSWD_HASH / the prompt;
+    # additional users would need their own hashes (see note in config).
+    [[ "$uname" == "$PRIMARY_USER" ]] && set_password "$uname" "$USER_PASSWD_HASH"
+  done
 
   log "sudo"
   configure_sudo "$SUDO_NOPASSWD"
@@ -176,18 +192,27 @@ phase_system() {
   log "sddm (display manager)"
   configure_sddm "$SDDM_THEME"
 
+  log "data binds (@data -> home; apps save normally, files persist)"
+  configure_data_binds "$PRIMARY_USER" "$PRIMARY_UID" "${DATA_BINDS[@]}"
+
   log "services"
   for s in "${SERVICES[@]}"; do ensure_service "$s"; done
 
   log "bootloader"
   install_systemd_boot
 
-  log "aur (STUB)"
-  # bootstrap paru/yay once, then install "${AUR[@]}" guarded by `pacman -Qq`
+  log "aur helper + packages"
+  if (( ${#AUR[@]} )) || ! command -v yay &>/dev/null; then
+    aur_grant_temp_sudo "$PRIMARY_USER"
+    trap 'aur_revoke_temp_sudo' EXIT       # always revoke, even on set -e abort
+    ensure_aur_helper "$PRIMARY_USER" && aur_install "$PRIMARY_USER"
+    aur_revoke_temp_sudo
+    trap - EXIT
+  fi
 
   log "dotfiles — config is disposable, git owns it (STUB)"
   # [[ -d "$DOTFILES_DIR" ]] || git clone "$DOTFILES_REPO" "$DOTFILES_DIR"
-  # stow -d "$DOTFILES_DIR" -t "/home/$USERNAME" <packages>
+  # stow -d "$DOTFILES_DIR" -t "/home/$PRIMARY_USER" <packages>
 
   log "system phase complete"
 }

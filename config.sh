@@ -24,13 +24,38 @@ WIPE_SUBVOLS=(@ @home)
 # Subvolumes that persist across a clean build. Never destroyed.
 KEEP_SUBVOLS=(@data)
 
-# --- User -----------------------------------------------------------
-USERNAME="toby"
-USER_UID=1000              # pinned: a persisted home stays correctly owned
-USER_GROUPS="wheel,audio,video,storage"
-USER_SHELL="/bin/bash"     # login shell. bash = max compatibility with most
-                           # Linux instructions. Set to /usr/bin/fish if you
-                           # want fish as login shell (ensure it's in PACKAGES).
+# --- Data binds (the @data persistence wiring) ----------------------
+# Maps a folder INSIDE @data  ->  a path in the user's home. Each becomes a
+# bind mount in the installed fstab, so apps saving to their normal home
+# locations (~/Videos etc.) transparently land on @data and survive rebuilds.
+# No per-app configuration is ever needed.
+#
+# Format: "subdir-in-@data|relative-path-in-home"
+# The Resolve entry is special: its DATABASE lives in a hidden config path,
+# so it needs its own bind to be preserved (project list/edits/grades).
+DATA_BINDS=(
+  "Videos|Videos"
+  "Downloads|Downloads"
+  "Documents|Documents"
+  "Projects|Projects"
+  ".resolve-db|.local/share/DaVinciResolve"
+)
+
+# --- Users ----------------------------------------------------------
+# A LIST of users (one for now). Each record is pipe-delimited:
+#   "name|uid|groups|shell"
+# To add a second user later: append another line with a DISTINCT uid, and
+# (if you want their data to persist) extend DATA_BINDS — see note there.
+# UIDs must stay stable forever: @data files are owned by uid, not name.
+USERS=(
+  "toby|1000|wheel,audio,video,storage|/bin/bash"
+)
+
+# The "primary" user — the one DATA_BINDS and single-user steps target.
+# Derived from the first record so existing logic keeps working unchanged.
+PRIMARY_USER="${USERS[0]%%|*}"
+_primary_rest="${USERS[0]#*|}"
+PRIMARY_UID="${_primary_rest%%|*}"
 
 # --- sudo -----------------------------------------------------------
 # Grant the wheel group sudo. Password-required by default — safer on a box
@@ -50,6 +75,22 @@ SUDO_NOPASSWD=0
 ROOT_PASSWD_HASH="${ROOT_PASSWD_HASH:-}"
 USER_PASSWD_HASH="${USER_PASSWD_HASH:-}"
 
+# --- Build profile (vm vs metal) ------------------------------------
+# Gates hardware/environment-specific extras. "vm" adds guest tooling
+# (e.g. spice-vdagent for auto-resize); "metal" skips it. Override at
+# runtime:  PROFILE=metal ./provision.sh disk
+PROFILE="${PROFILE:-vm}"
+
+# Extras added per profile (merged into PACKAGES/SERVICES below).
+declare -A PROFILE_PACKAGES=(
+  [vm]="spice-vdagent"            # SPICE guest agent -> resolution auto-resize
+  [metal]=""                      # add metal-only bits here (e.g. nvidia, firmware)
+)
+declare -A PROFILE_SERVICES=(
+  [vm]="spice-vdagentd"           # the agent daemon
+  [metal]=""
+)
+
 # --- Kernel (the boot entry's vmlinuz/initramfs names derive from this) ---
 # Stock Arch: "linux" -> /boot/vmlinuz-linux + initramfs-linux.img
 # CachyOS:    "linux-cachyos" -> vmlinuz-linux-cachyos, etc.
@@ -57,11 +98,21 @@ USER_PASSWD_HASH="${USER_PASSWD_HASH:-}"
 KERNEL="linux"
 
 # --- Packages (Model A: this list is the source of truth) -----------
-PACKAGES=(
+# BASE_PACKAGES: the minimum to produce a bootable, chroot-able system.
+# pacstrap installs THESE (before multilib is enabled). Everything else is
+# installed by pkg_install inside the chroot, AFTER multilib is on — which is
+# why Steam (32-bit) must NOT be in the base set.
+BASE_PACKAGES=(
   base base-devel linux linux-firmware
   btrfs-progs
   networkmanager
   sudo git stow fish
+)
+
+# PACKAGES: the full desired set, installed after multilib is enabled.
+# (Includes the base set too; --needed makes the overlap a no-op.)
+PACKAGES=(
+  "${BASE_PACKAGES[@]}"
 
   # --- KDE Plasma (Wayland-only; X11 session is dropped from 6.8) ---
   plasma-desktop            # lean: NOT the 'plasma' meta (avoids KDE PIM etc.)
@@ -69,7 +120,20 @@ PACKAGES=(
   layer-shell-qt            # REQUIRED for the Wayland SDDM greeter (Qt6)
   konsole dolphin           # terminal + file manager
   pipewire pipewire-pulse wireplumber   # audio (you capture audio)
-  # ... your daily set goes here
+
+  # --- KDE apps ---
+  plasma-systemmonitor      # resource monitor (modern; ksysguard is deprecated)
+  kate                      # text editor
+  gwenview                  # image viewer (integrates with Dolphin)
+  ark p7zip unzip           # archive handling from Dolphin
+
+  # --- daily ---
+  vlc                       # video player (watch footage without opening Resolve)
+  btop                      # terminal system monitor
+  steam                     # needs multilib (enabled before pkg_install)
+
+  # --- fonts (a bare desktop renders poorly / shows tofu without these) ---
+  ttf-dejavu ttf-liberation noto-fonts noto-fonts-emoji
 )
 
 # SDDM theme. "breeze" is the official KDE theme — clean, modern, dark-capable,
@@ -78,7 +142,11 @@ PACKAGES=(
 SDDM_THEME="breeze"
 
 AUR=(
-  # davinci-resolve
+  zen-browser-bin           # Zen browser (prebuilt; building from source is a long compile)
+
+  # davinci-resolve         # DELIBERATELY manual: the PKGBUILD needs the installer
+                            # fetched by hand from Blackmagic (licensing), so it won't
+                            # install unattended. Do it by hand after first boot.
 )
 
 # --- Services to enable ---------------------------------------------
@@ -87,6 +155,13 @@ SERVICES=(
   sddm                      # start the graphical login at boot
 )
 
+# Merge the selected profile's extras into PACKAGES/SERVICES. word-splitting
+# is intentional here (space-separated lists in the maps above).
+# shellcheck disable=SC2206
+[[ -n "${PROFILE_PACKAGES[$PROFILE]:-}" ]] && PACKAGES+=(${PROFILE_PACKAGES[$PROFILE]})
+# shellcheck disable=SC2206
+[[ -n "${PROFILE_SERVICES[$PROFILE]:-}" ]] && SERVICES+=(${PROFILE_SERVICES[$PROFILE]})
+
 # --- Dotfiles (config is disposable — git owns it, not @home) -------
 DOTFILES_REPO=""           # e.g. https://github.com/you/dotfiles
-DOTFILES_DIR="/home/${USERNAME}/.dotfiles"
+DOTFILES_DIR="/home/${PRIMARY_USER}/.dotfiles"
