@@ -140,3 +140,47 @@ mount -o subvol=@data /dev/sda2 /mnt
 cat /mnt/MARKER
 umount /mnt
 ```
+
+---
+
+## Backup round-trip test (do this BEFORE trusting backup.sh)
+
+A backup you have never restored from is a hope, not a backup. The LUKS layer
+adds a second thing that must round-trip, so test the full cycle on a SCRATCH
+drive first — never your only copy of anything.
+
+1. **Init a scratch drive** (erases it):
+   ```sh
+   lsblk                                  # identify the external drive, e.g. /dev/sdb
+   sudo ./backup.sh init /dev/sdb         # type the path to confirm; set a passphrase
+   ```
+   Store the passphrase somewhere safe that is NOT this machine.
+
+2. **Put a known marker in /data, then back up:**
+   ```sh
+   echo "backup-test $(date)" | sudo tee /data/BACKUP-MARKER
+   sudo ./backup.sh backup --dry-run      # preview first
+   sudo ./backup.sh backup                # real run; enter passphrase
+   ```
+
+3. **Restore to a SCRATCH location and diff** (don't overwrite the real /data):
+   Temporarily point restore at an empty dir by editing `SOURCE=/data` in
+   backup.sh to e.g. `SOURCE=/tmp/restore-test`, then:
+   ```sh
+   sudo mkdir -p /tmp/restore-test
+   sudo ./backup.sh restore               # enter passphrase
+   sudo diff -r /data /tmp/restore-test    # expect: no differences (bar excludes)
+   cat /tmp/restore-test/BACKUP-MARKER     # the marker should be present
+   ```
+   Then restore the real `SOURCE=/data` line in backup.sh.
+
+4. **Confirm the drive locks itself.** After any run, the drive should be
+   unmounted and re-locked (no `/dev/mapper/backupcrypt`, nothing at the mount
+   point). Check:
+   ```sh
+   ls /dev/mapper/ | grep backupcrypt && echo "STILL UNLOCKED - investigate" || echo "locked (correct)"
+   ```
+
+Only once the diff is clean and the round trip works should you trust it with
+real footage. After that, routine use is just: plug in, `sudo ./backup.sh
+backup`, enter passphrase, unplug.

@@ -91,19 +91,27 @@ declare -A PROFILE_SERVICES=(
   [metal]=""
 )
 
-# --- Kernel (the boot entry's vmlinuz/initramfs names derive from this) ---
-# Stock Arch: "linux" -> /boot/vmlinuz-linux + initramfs-linux.img
-# CachyOS:    "linux-cachyos" -> vmlinuz-linux-cachyos, etc.
-# Keep this in step with whatever kernel is in PACKAGES below.
-KERNEL="linux"
+# --- Kernels --------------------------------------------------------
+# A LIST of kernel packages. The FIRST is the default boot entry; the rest
+# are fallback entries systemd-boot offers at the menu. Each name maps to
+# /boot/vmlinuz-<name> + initramfs-<name>.img.
+#   linux      -> stock (daily). Best-tested reference kernel.
+#   linux-lts  -> fallback. Reboot into this if a rolling update breaks stock.
+# The fallback is the real recovery path on a rolling release.
+KERNELS=(linux linux-lts)
+
+# Primary kernel — first in the list. Used where a single kernel reference is
+# needed (kept for compatibility with anything expecting one name).
+KERNEL="${KERNELS[0]}"
 
 # --- Packages (Model A: this list is the source of truth) -----------
 # BASE_PACKAGES: the minimum to produce a bootable, chroot-able system.
 # pacstrap installs THESE (before multilib is enabled). Everything else is
 # installed by pkg_install inside the chroot, AFTER multilib is on — which is
 # why Steam (32-bit) must NOT be in the base set.
+# Kernels (all of KERNELS) go here so they're present for the bootloader.
 BASE_PACKAGES=(
-  base base-devel linux linux-firmware
+  base base-devel "${KERNELS[@]}" linux-firmware
   btrfs-progs
   networkmanager
   sudo git stow fish
@@ -116,6 +124,9 @@ PACKAGES=(
 
   # --- KDE Plasma (Wayland-only; X11 session is dropped from 6.8) ---
   plasma-desktop            # lean: NOT the 'plasma' meta (avoids KDE PIM etc.)
+  kscreen                   # display config GUI (resolution/arrangement KCM) —
+                            # NOT included in plasma-desktop alone
+  plasma-nm                 # network applet in the system tray (GUI for NetworkManager)
   sddm                      # login manager (KDE-native, themes cleanly)
   layer-shell-qt            # REQUIRED for the Wayland SDDM greeter (Qt6)
   konsole dolphin           # terminal + file manager

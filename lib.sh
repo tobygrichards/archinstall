@@ -7,6 +7,55 @@ log()  { printf '\033[1;34m::\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!!\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31mXX\033[0m %s\n' "$*" >&2; exit 1; }
 
+# Register the EFI NVRAM boot entry on FIRST REAL BOOT — the one task that
+# CANNOT happen during the build, because a chroot has no firmware context to
+# write EFI variables (hence the build-time "skipping EFI variable
+# modifications"). Without it the system boots via the fallback path
+# (/boot/EFI/BOOT/BOOTX64.EFI), which works in VMs and on forgiving firmware
+# but can fail on some real motherboards. So we install a one-shot service
+# that runs `bootctl install` once on first boot (where NVRAM IS writable),
+# then disables itself. FAIL-SAFE: if it errors it logs and exits 0 — the
+# fallback path still boots, so a failed registration is a non-event, never a
+# wedged boot. Reinstalled fresh on every rebuild (since @ is wiped), so it
+# re-registers after each build — intended.
+configure_efi_firstboot() {
+  install -d /usr/local/sbin
+  cat > /usr/local/sbin/register-efi-entry <<'SCRIPT'
+#!/usr/bin/env bash
+# One-shot: register the systemd-boot EFI entry now that we're booted under
+# real firmware. Fail-safe — never block boot.
+set +e
+if [[ -d /sys/firmware/efi/efivars ]]; then
+    bootctl install && echo "register-efi-entry: EFI entry registered."
+else
+    echo "register-efi-entry: no efivars (not EFI / no NVRAM access) — leaving fallback path in place."
+fi
+# disable self regardless of outcome, so it only ever runs once per build
+systemctl disable register-efi-entry.service 2>/dev/null
+exit 0
+SCRIPT
+  chmod 0755 /usr/local/sbin/register-efi-entry
+
+  cat > /etc/systemd/system/register-efi-entry.service <<'UNIT'
+[Unit]
+Description=Register systemd-boot EFI entry on first boot
+# needs the ESP mounted; runs late, after local filesystems
+After=local-fs.target
+ConditionPathExists=/sys/firmware/efi
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/register-efi-entry
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+  systemctl enable register-efi-entry.service &>/dev/null
+  log "EFI first-boot registration service installed (runs once on real boot)"
+}
+
 # --- Idempotency guards (the entire "re-runnable" tax) --------------
 # Enable the [multilib] repo (32-bit packages, needed by Steam). The stock
 # pacman.conf ships it commented out as a 2-line block. Uncomment both lines

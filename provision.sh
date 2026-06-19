@@ -200,6 +200,7 @@ phase_system() {
 
   log "bootloader"
   install_systemd_boot
+  configure_efi_firstboot
 
   log "aur helper + packages"
   if (( ${#AUR[@]} )) || ! command -v yay &>/dev/null; then
@@ -217,37 +218,45 @@ phase_system() {
   log "system phase complete"
 }
 
-# systemd-boot. Deliberately dumb: it does NOT autodetect kernels, so the
+# systemd-boot. Deliberately dumb: it does NOT autodetect kernels, so each
 # loader entry is hand-written. The two failure modes that produce a dead
 # prompt are (1) wrong root identity, (2) missing initramfs line — both
-# guarded against below by deriving the PARTUUID live and asserting it.
+# guarded against below by deriving the PARTUUID live and asserting each
+# kernel's initramfs exists. Writes one entry per kernel in KERNELS; the
+# first is the default, the rest are fallbacks shown at the menu.
 install_systemd_boot() {
   local root_dev partuuid
-  # The device backing / right now (resolves the @ subvol mount to its node).
   root_dev="$(findmnt -no SOURCE / | sed 's/\[.*\]//')"   # strip [/@] subvol suffix
   partuuid="$(blkid -s PARTUUID -o value "$root_dev")"
   [[ -n "$partuuid" ]] || die "could not derive PARTUUID for $root_dev — refusing to write a boot entry that won't boot."
 
   bootctl install
 
+  # default entry = the first kernel's entry file
+  local default_entry="${KERNELS[0]}.conf"
   cat > /boot/loader/loader.conf <<EOF
-default arch.conf
+default ${default_entry}
 timeout 3
 console-mode max
 editor no
 EOF
 
-  cat > /boot/loader/entries/arch.conf <<EOF
-title   Arch Linux
-linux   /vmlinuz-${KERNEL}
-initrd  /initramfs-${KERNEL}.img
+  # one entry per kernel
+  local k title
+  for k in "${KERNELS[@]}"; do
+    # human-friendly title: "Arch Linux" for stock, "Arch Linux (lts)" etc.
+    if [[ "$k" == linux ]]; then title="Arch Linux"; else title="Arch Linux (${k#linux-})"; fi
+    cat > "/boot/loader/entries/${k}.conf" <<EOF
+title   ${title}
+linux   /vmlinuz-${k}
+initrd  /initramfs-${k}.img
 options root=PARTUUID=${partuuid} rootflags=subvol=@ rw
 EOF
-
-  # Assert the entry references an initramfs that actually exists.
-  [[ -e "/boot/initramfs-${KERNEL}.img" ]] \
-    || warn "initramfs-${KERNEL}.img missing in /boot — entry will not boot until mkinitcpio has run."
-  log "systemd-boot installed; root=PARTUUID=${partuuid} subvol=@"
+    [[ -e "/boot/initramfs-${k}.img" ]] \
+      || warn "initramfs-${k}.img missing in /boot — '${title}' entry will not boot until mkinitcpio has run."
+    log "  boot entry: ${title} (${k})"
+  done
+  log "systemd-boot installed; default=${KERNELS[0]}, root=PARTUUID=${partuuid} subvol=@"
 }
 
 # ====================================================================
