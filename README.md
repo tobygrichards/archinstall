@@ -28,6 +28,8 @@ documents untouched.
   locations (`~/Videos`, `~/Downloads`, …) and the files transparently persist.
 - **Re-runnable**: a second run detects the existing install and rebuilds the
   OS in place, preserving `@data`.
+- **Encrypted backup** (`backup.sh`): LUKS-encrypted external-drive backup of
+  `@data`, with restore — doubles as transport to a new machine.
 
 ## Design decisions
 
@@ -89,6 +91,26 @@ a fresh build aborts on a bad name; a rebuild skips it and continues.
 
 For the VM test cycle (and troubleshooting), see [`TEST-RUNBOOK.md`](TEST-RUNBOOK.md).
 
+### Backup
+
+The backup is a separate script — the provisioner never touches the backup
+drive, and the backup never touches the OS disk. The drive is LUKS-encrypted,
+so a lost or stolen drive is unreadable without the passphrase.
+
+```sh
+sudo ./backup.sh init /dev/sdX     # ONCE per drive: erase + LUKS-encrypt it
+sudo ./backup.sh backup            # /data -> drive (accumulates; no deletions propagate)
+sudo ./backup.sh restore           # drive -> /data (recovery, or onto a new PC)
+```
+
+Add `--dry-run` to `backup`/`restore` to preview without writing. Edit the
+config block at the top of `backup.sh` (drive label, excludes, restore UID).
+
+**Before trusting it, prove the round trip** — back up, restore to a scratch
+location, and diff against `/data`. A backup you have never restored from is a
+hope, not a backup. **Store the LUKS passphrase somewhere safe that is NOT the
+machine being backed up** — lose it and the backup is unrecoverable.
+
 ## Files
 
 | File | Role |
@@ -97,20 +119,25 @@ For the VM test cycle (and troubleshooting), see [`TEST-RUNBOOK.md`](TEST-RUNBOO
 | `provision.sh` | Orchestration. `disk` (destructive) and `system` (re-runnable) phases. |
 | `lib.sh` | Mechanism: idempotent helpers and the guarded destructive primitives. |
 | `config.sh` | Declarative spec — the only file you edit to change the machine. |
+| `backup.sh` | Encrypted (LUKS) backup/restore of `@data` to an external drive. Separate from the provisioner by design. |
 | `TEST-RUNBOOK.md` | Step-by-step VM test procedure and troubleshooting. |
-
-## Not yet done
-
-- **Backup** — copying `@data` to an external drive. Surviving a *rebuild* is
-  not the same as surviving a *dead disk*; this is the piece that protects
-  against drive failure, and it is the most important outstanding work.
-- **Dotfiles** — the git-managed config that makes a rebuilt machine *mine*
-  rather than stock Plasma.
-- **EFI boot entry** — currently boots via the removable/fallback path; a
-  registered firmware entry is the tidy fix before metal.
 
 ## Status
 
-The build-and-rebuild spine, desktop, data persistence and package management
-are working and tested on a VM, including verified preservation of `@data`
-across a full OS rebuild.
+Built and tested on a VM: the build-and-rebuild spine, desktop, data
+persistence (verified `@data` survives a full OS rebuild), package management
+and AUR.
+
+Built but not yet verified on real hardware:
+- **Backup** (`backup.sh`) — logic complete; needs a real-drive round-trip
+  test (init -> backup -> restore -> diff) before it is trusted. This is the
+  most important thing to actually test, as a backup is the only protection
+  against a dead disk.
+- **EFI boot entry** — a first-boot service registers the firmware boot entry
+  (the build-time chroot can't). Works via the fallback path meanwhile; the
+  registered entry only matters on real firmware, so it is unverified until metal.
+
+Still to do:
+- **Dotfiles** — git-managed config (stow) so a rebuild restores *my* desktop
+  rather than stock Plasma. Best done after living in the machine long enough
+  to have config worth capturing.
