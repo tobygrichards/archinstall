@@ -113,20 +113,29 @@ configure_dotfiles() {
   # --- copy packages (copied into place, owned by the user) --------
   # Mirror each package's tree into $home. cp -a preserves perms (incl. the
   # executable bit on the apply script). Overwrites on rebuild — intended.
+  # --- copy packages (copied into place, then chowned to the user) --
+  # Copy as ROOT (can write into any home subdir, incl. ones created by
+  # earlier root steps), then hand ownership to the user. Doing the copy via
+  # `sudo -u user` fails when .local/.config already exist root-owned, and
+  # `cp -a` preserving times on unowned dirs errors too. Root-copy + chown
+  # sidesteps both. Use --no-preserve=timestamps to avoid time-preserve noise.
+  local uid gid
+  uid="$(id -u "$user")"; gid="$(id -g "$user")"
   for p in "${copy_pkgs[@]}"; do
     [[ -d "$dir/$p" ]] || { warn "copy package '$p' not in repo — skipping"; continue; }
-    # copy the package's CONTENTS (dotfiles included) into home
-    if sudo -u "$user" cp -a "$dir/$p/." "$home/"; then
+    if cp -r --no-preserve=mode,ownership "$dir/$p/." "$home/"; then
       log "  copied: $p"
     else
       warn "  copy '$p' failed"
     fi
   done
+  # ownership of everything the copy may have created/touched -> the user
+  chown -R "$uid:$gid" "$home/.local" "$home/.config" 2>/dev/null || true
 
   # Guarantee the plasma apply script is executable, regardless of how the
   # mode bit survived git/file-manager round-trips. Harmless if absent.
   local apply="$home/.local/share/plasma-layout/apply-plasma-layout"
-  [[ -f "$apply" ]] && sudo -u "$user" chmod +x "$apply"
+  [[ -f "$apply" ]] && chmod +x "$apply"
 }
 
 # --- Idempotency guards (the entire "re-runnable" tax) --------------
