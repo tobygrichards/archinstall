@@ -48,7 +48,7 @@ DATA_BINDS=(
 # (if you want their data to persist) extend DATA_BINDS — see note there.
 # UIDs must stay stable forever: @data files are owned by uid, not name.
 USERS=(
-  "toby|1000|wheel,audio,video,storage|/bin/bash"
+  "toby|1000|wheel,audio,video,storage|/usr/bin/fish"
 )
 
 # The "primary" user — the one DATA_BINDS and single-user steps target.
