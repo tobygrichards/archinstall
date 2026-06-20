@@ -145,7 +145,7 @@ install_base() {
     BUILD_MODE="${BUILD_MODE:-rebuild}" \
     ROOT_PASSWD_HASH="${ROOT_PASSWD_HASH:-}" \
     USER_PASSWD_HASH="${USER_PASSWD_HASH:-}" \
-    /root/provision/provision.sh system
+    bash /root/provision/provision.sh system
   # Don't leave the provisioner (and any config) sitting in the new /root.
   rm -rf "$MOUNT/root/provision"
 }
