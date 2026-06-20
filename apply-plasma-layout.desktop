@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Apply Plasma Layout (first login)
+Exec=/home/toby/.local/share/plasma-layout/apply-plasma-layout
+# Only in a Plasma session; runs once then deletes itself.
+OnlyShowIn=KDE;
+X-KDE-autostart-phase=2

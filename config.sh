@@ -181,7 +181,7 @@ DOTFILES_REPO="https://github.com/tobygrichards/dotfiles.git"
 DOTFILES_DIR="/home/${PRIMARY_USER}/.dotfiles"
 
 # stow packages to apply (each is a top-level dir in the dotfiles repo).
-# Add 'plasma' here once the monitor-agnostic KDE layout script exists.
 DOTFILES_PACKAGES=(
   fish
+  plasma                    # panel layout (applied once on first login)
 )
