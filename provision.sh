@@ -212,7 +212,8 @@ phase_system() {
   fi
 
   log "dotfiles (config restored from git — the other half of Model A)"
-  configure_dotfiles "$PRIMARY_USER" "$DOTFILES_REPO" "$DOTFILES_DIR" "${DOTFILES_PACKAGES[@]}"
+  configure_dotfiles "$PRIMARY_USER" "$DOTFILES_REPO" "$DOTFILES_DIR" \
+    --stow "${DOTFILES_STOW[@]}" --copy "${DOTFILES_COPY[@]}"
 
   log "system phase complete"
 }

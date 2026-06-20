@@ -180,8 +180,14 @@ SERVICES=(
 DOTFILES_REPO="https://github.com/tobygrichards/dotfiles.git"
 DOTFILES_DIR="/home/${PRIMARY_USER}/.dotfiles"
 
-# stow packages to apply (each is a top-level dir in the dotfiles repo).
-DOTFILES_PACKAGES=(
+# Dotfiles are applied two ways:
+#   STOW  — live config you edit; symlinked back to the repo (e.g. fish).
+#   COPY  — install-once artifacts that aren't live-edited and don't suit a
+#           symlink (e.g. the plasma layout: a script + a self-deleting
+#           autostart trigger). These are copied into place, not linked.
+DOTFILES_STOW=(
   fish
-  plasma                    # panel layout (applied once on first login)
+)
+DOTFILES_COPY=(
+  plasma                    # panel layout script + first-login apply trigger
 )

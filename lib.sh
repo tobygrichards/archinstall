@@ -60,17 +60,27 @@ UNIT
 # just wiped on a clean build, so this restores the user's config. Runs as the
 # user (so files are owned correctly) and targets their home.
 #
-# Conflict handling: on a fresh @home there should be no clashing files, but
-# some apps write defaults early. stow refuses to overwrite a real file, so we
-# pass --adopt is NOT used (it would pull stray files INTO the repo). Instead
-# we remove a conflicting target only if it's not already our symlink, then
-# stow. Skips cleanly if DOTFILES_REPO is empty.
+# Two kinds of package:
+#   stow_pkgs — live config, symlinked back to the repo (e.g. fish). stow owns
+#               isolated subtrees like ~/.config/fish cleanly.
+#   copy_pkgs — install-once artifacts copied into place (e.g. the plasma
+#               layout: a script + a self-deleting autostart trigger). These
+#               don't suit symlinks and would fight stow over shared dirs like
+#               ~/.config/autostart, so they're copied, not linked.
+# Args: user repo dir  --stow <pkgs...>  --copy <pkgs...>
 configure_dotfiles() {
   local user="$1" repo="$2" dir="$3"; shift 3
-  local pkgs=("$@")
+  local stow_pkgs=() copy_pkgs=() bucket=""
+  local a
+  for a in "$@"; do
+    case "$a" in
+      --stow) bucket=stow ;;
+      --copy) bucket=copy ;;
+      *) [[ "$bucket" == stow ]] && stow_pkgs+=("$a"); [[ "$bucket" == copy ]] && copy_pkgs+=("$a") ;;
+    esac
+  done
+
   [[ -n "$repo" ]] || { log "no DOTFILES_REPO set — skipping dotfiles"; return 0; }
-  (( ${#pkgs[@]} )) || { log "no dotfiles packages listed — skipping"; return 0; }
-  command -v stow &>/dev/null || { warn "stow not installed — skipping dotfiles"; return 0; }
 
   # clone (or refresh) as the user
   if [[ -d "$dir/.git" ]]; then
@@ -83,16 +93,40 @@ configure_dotfiles() {
   fi
 
   local home="/home/$user" p
-  for p in "${pkgs[@]}"; do
-    [[ -d "$dir/$p" ]] || { warn "dotfiles package '$p' not found in repo — skipping"; continue; }
-    # restow is idempotent: re-links cleanly if already linked
-    if sudo -u "$user" stow -d "$dir" -t "$home" --restow "$p" 2>/dev/null; then
-      log "  stowed: $p"
+
+  # --- stow packages (symlinked) -----------------------------------
+  if (( ${#stow_pkgs[@]} )); then
+    if command -v stow &>/dev/null; then
+      for p in "${stow_pkgs[@]}"; do
+        [[ -d "$dir/$p" ]] || { warn "stow package '$p' not in repo — skipping"; continue; }
+        if sudo -u "$user" stow -d "$dir" -t "$home" --restow "$p" 2>/dev/null; then
+          log "  stowed: $p"
+        else
+          warn "  stow '$p' hit a conflict — a real file exists where a symlink should go."
+        fi
+      done
     else
-      warn "  stow '$p' hit a conflict — a real file exists where a symlink should go."
-      warn "  (resolve by removing the conflicting file in $home, then re-run.)"
+      warn "stow not installed — skipping stow packages"
+    fi
+  fi
+
+  # --- copy packages (copied into place, owned by the user) --------
+  # Mirror each package's tree into $home. cp -a preserves perms (incl. the
+  # executable bit on the apply script). Overwrites on rebuild — intended.
+  for p in "${copy_pkgs[@]}"; do
+    [[ -d "$dir/$p" ]] || { warn "copy package '$p' not in repo — skipping"; continue; }
+    # copy the package's CONTENTS (dotfiles included) into home
+    if sudo -u "$user" cp -a "$dir/$p/." "$home/"; then
+      log "  copied: $p"
+    else
+      warn "  copy '$p' failed"
     fi
   done
+
+  # Guarantee the plasma apply script is executable, regardless of how the
+  # mode bit survived git/file-manager round-trips. Harmless if absent.
+  local apply="$home/.local/share/plasma-layout/apply-plasma-layout"
+  [[ -f "$apply" ]] && sudo -u "$user" chmod +x "$apply"
 }
 
 # --- Idempotency guards (the entire "re-runnable" tax) --------------
