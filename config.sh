@@ -174,5 +174,14 @@ SERVICES=(
 [[ -n "${PROFILE_SERVICES[$PROFILE]:-}" ]] && SERVICES+=(${PROFILE_SERVICES[$PROFILE]})
 
 # --- Dotfiles (config is disposable — git owns it, not @home) -------
-DOTFILES_REPO=""           # e.g. https://github.com/you/dotfiles
+# A separate repo, cloned and stowed on every build. This is the other half
+# of Model A: @home is wiped, the dotfiles repo restores your config.
+# Leave DOTFILES_REPO empty to skip the whole step (e.g. early testing).
+DOTFILES_REPO="https://github.com/tobygrichards/dotfiles.git"
 DOTFILES_DIR="/home/${PRIMARY_USER}/.dotfiles"
+
+# stow packages to apply (each is a top-level dir in the dotfiles repo).
+# Add 'plasma' here once the monitor-agnostic KDE layout script exists.
+DOTFILES_PACKAGES=(
+  fish
+)

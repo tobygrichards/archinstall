@@ -211,9 +211,8 @@ phase_system() {
     trap - EXIT
   fi
 
-  log "dotfiles — config is disposable, git owns it (STUB)"
-  # [[ -d "$DOTFILES_DIR" ]] || git clone "$DOTFILES_REPO" "$DOTFILES_DIR"
-  # stow -d "$DOTFILES_DIR" -t "/home/$PRIMARY_USER" <packages>
+  log "dotfiles (config restored from git — the other half of Model A)"
+  configure_dotfiles "$PRIMARY_USER" "$DOTFILES_REPO" "$DOTFILES_DIR" "${DOTFILES_PACKAGES[@]}"
 
   log "system phase complete"
 }

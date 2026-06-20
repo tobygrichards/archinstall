@@ -56,6 +56,45 @@ UNIT
   log "EFI first-boot registration service installed (runs once on real boot)"
 }
 
+# Clone the dotfiles repo and stow it — the other half of Model A. @home was
+# just wiped on a clean build, so this restores the user's config. Runs as the
+# user (so files are owned correctly) and targets their home.
+#
+# Conflict handling: on a fresh @home there should be no clashing files, but
+# some apps write defaults early. stow refuses to overwrite a real file, so we
+# pass --adopt is NOT used (it would pull stray files INTO the repo). Instead
+# we remove a conflicting target only if it's not already our symlink, then
+# stow. Skips cleanly if DOTFILES_REPO is empty.
+configure_dotfiles() {
+  local user="$1" repo="$2" dir="$3"; shift 3
+  local pkgs=("$@")
+  [[ -n "$repo" ]] || { log "no DOTFILES_REPO set — skipping dotfiles"; return 0; }
+  (( ${#pkgs[@]} )) || { log "no dotfiles packages listed — skipping"; return 0; }
+  command -v stow &>/dev/null || { warn "stow not installed — skipping dotfiles"; return 0; }
+
+  # clone (or refresh) as the user
+  if [[ -d "$dir/.git" ]]; then
+    log "dotfiles repo present — pulling latest"
+    sudo -u "$user" git -C "$dir" pull --ff-only &>/dev/null || warn "dotfiles pull failed — using existing checkout"
+  else
+    log "cloning dotfiles: $repo"
+    sudo -u "$user" git clone --depth=1 "$repo" "$dir" \
+      || { warn "dotfiles clone failed — skipping (check the repo URL/network)"; return 0; }
+  fi
+
+  local home="/home/$user" p
+  for p in "${pkgs[@]}"; do
+    [[ -d "$dir/$p" ]] || { warn "dotfiles package '$p' not found in repo — skipping"; continue; }
+    # restow is idempotent: re-links cleanly if already linked
+    if sudo -u "$user" stow -d "$dir" -t "$home" --restow "$p" 2>/dev/null; then
+      log "  stowed: $p"
+    else
+      warn "  stow '$p' hit a conflict — a real file exists where a symlink should go."
+      warn "  (resolve by removing the conflicting file in $home, then re-run.)"
+    fi
+  done
+}
+
 # --- Idempotency guards (the entire "re-runnable" tax) --------------
 # Enable the [multilib] repo (32-bit packages, needed by Steam). The stock
 # pacman.conf ships it commented out as a 2-line block. Uncomment both lines
